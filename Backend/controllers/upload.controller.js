@@ -102,7 +102,7 @@ async function uploadResume(req, res) {
       analysis,
     });
 
-    res.json({
+    res.status(200).json({
       success: true,
       analysisId,
       filename: req.file.filename,
@@ -111,17 +111,23 @@ async function uploadResume(req, res) {
       analysis,
     });
   } catch (processError) {
-    const status = /Failed to (store|validate|look up|create) /.test(
-      processError.message,
-    )
-      ? 500
-      : 422;
+  console.error("========== UPLOAD ERROR ==========");
+  console.error(processError);
+  console.error(processError.stack);
+  console.error("==================================");
 
-    res.status(status).json({
-      success: false,
-      message: processError.message,
-    });
-  }
+  const status = /Failed to (store|validate|look up|create) /.test(
+    processError.message,
+  )
+    ? 500
+    : 422;
+
+  res.status(status).json({
+    success: false,
+    message: processError.message,
+    stack: process.env.NODE_ENV !== "production" ? processError.stack : undefined,
+  });
+}
 }
 
 module.exports = {

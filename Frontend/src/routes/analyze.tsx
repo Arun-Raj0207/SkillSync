@@ -330,7 +330,6 @@ function AnalyzePage() {
                     file={file!}
                     analysis={analysis}
                     onRemove={removeFile}
-                    onAnalyze={() => {}}
                   />
                 )}
 
@@ -492,11 +491,11 @@ function DropZone({
                 {dragging ? "Drop it right here" : "Drag & drop your resume"}
               </Typography>
               <Typography variant="body2">
-                or <Box component="span" sx={{ color: "primary.light", fontWeight: 600 }}>click to browse</Box> · PDF, DOC or DOCX up to {MAX_MB}MB
+                or <Box component="span" sx={{ color: "primary.light", fontWeight: 600 }}>click to browse</Box> · DOC/DOCX up to {MAX_MB}MB
               </Typography>
             </Stack>
             <Stack direction="row" spacing={1}>
-              <Chip size="small" label="PDF" />
+              <Chip size="small" label="DOC/DOCX" />
               <Chip size="small" label="DOC" />
               <Chip size="small" label="DOCX" />
             </Stack>

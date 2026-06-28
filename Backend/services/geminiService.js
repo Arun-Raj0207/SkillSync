@@ -13,6 +13,55 @@ function ensureConfig() {
   }
 }
 
+async function openRouterChat(messages, temperature = 0.2, max_tokens = 512) {
+  ensureConfig();
+
+  try {
+    const resp = await axios.post(
+      'https://openrouter.ai/api/v1/chat/completions',
+      {
+        model: AI_MODEL,
+        messages,
+        temperature,
+        max_tokens,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'http://localhost:5000',
+          'X-Title': 'SkillSync',
+        },
+        timeout: 30_000,
+      }
+    );
+
+    const choices = resp?.data?.choices;
+    const content =
+      Array.isArray(choices) && choices.length > 0
+        ? choices[0]?.message?.content || choices[0]?.message || choices[0]?.text
+        : null;
+
+    if (!content) {
+      throw new Error('OpenRouter returned an empty response.');
+    }
+
+    return content;
+  } catch (err) {
+    if (err.isAxiosError) {
+      const status = err.response?.status;
+      const data = err.response?.data;
+      throw new Error(
+        `OpenRouter request failed${status ? ` (status ${status})` : ''}: ${
+          data ? JSON.stringify(data) : err.message
+        }`
+      );
+    }
+
+    throw new Error(`OpenRouter request failed: ${err.message}`);
+  }
+}
+
 function extractJsonFromText(text) {
   if (!text || typeof text !== 'string') {
     return { parsed: null, error: new SyntaxError('Response is not text.') };
@@ -21,7 +70,7 @@ function extractJsonFromText(text) {
   const originalText = text;
   const trimmed = originalText.trim();
 
-  function tryParse(candidate) {
+  function tryParse(candidate, depth = 0) {
     if (!candidate || typeof candidate !== 'string') {
       return { parsed: null, error: new SyntaxError('Candidate is not a string.') };
     }
@@ -32,7 +81,19 @@ function extractJsonFromText(text) {
     }
 
     try {
-      return { parsed: JSON.parse(candidateText), error: null };
+      const parsedValue = JSON.parse(candidateText);
+
+      if (
+        typeof parsedValue === 'string' &&
+        depth < 2 &&
+        parsedValue.trim() &&
+        ((parsedValue.trim().startsWith('{') && parsedValue.trim().endsWith('}')) ||
+          (parsedValue.trim().startsWith('[') && parsedValue.trim().endsWith(']')))
+      ) {
+        return tryParse(parsedValue, depth + 1);
+      }
+
+      return { parsed: parsedValue, error: null };
     } catch (err) {
       return { parsed: null, error: err };
     }
@@ -46,7 +107,7 @@ function extractJsonFromText(text) {
 
   // 1) Try direct parse of the cleaned text
   const directAttempt = tryParse(cleanedText);
-  if (directAttempt.parsed !== null) {
+  if (directAttempt.parsed !== null && typeof directAttempt.parsed === 'object') {
     return directAttempt;
   }
 
@@ -58,7 +119,7 @@ function extractJsonFromText(text) {
   let match;
   while ((match = fenceRegex.exec(originalText)) !== null) {
     const candidateAttempt = tryParse(match[1]);
-    if (candidateAttempt.parsed !== null) {
+    if (candidateAttempt.parsed !== null && typeof candidateAttempt.parsed === 'object') {
       return candidateAttempt;
     }
     lastError = candidateAttempt.error || lastError;
@@ -96,7 +157,7 @@ function extractJsonFromText(text) {
 
   for (const candidate of candidates) {
     const candidateAttempt = tryParse(candidate);
-    if (candidateAttempt.parsed !== null) {
+    if (candidateAttempt.parsed !== null && typeof candidateAttempt.parsed === 'object') {
       parsedCandidates.push(candidateAttempt.parsed);
     } else {
       lastError = candidateAttempt.error || lastError;
@@ -120,11 +181,11 @@ async function analyzeResume(resumeText) {
 
   ensureConfig();
 
-  const systemInstruction =
-    'You are a placement evaluation assistant. Analyze resumes to evaluate placement readiness, score candidates, generate company matches, and produce tailored recommendations and a 4-week roadmap. Do not invent details that are not supported by the resume. Return ONLY a valid JSON object with no markdown, no code fences (```), no explanation text, and no additional characters before or after the JSON.';
+  const resumeExtractionSystem =
+    'You are a resume extraction assistant. Extract structured resume fields from the provided resume text and return ONLY valid JSON with no markdown, no code fences (```), no explanation text, and no additional characters before or after the JSON.';
 
-  const userPrompt =
-    'Analyze the following resume text and evaluate placement readiness. Extract the requested fields, score the candidate, generate company matches, produce recommendations, and create a 4-week actionable roadmap. Return only valid JSON that matches the following shape:\n' +
+  const resumeExtractionPrompt =
+    'Extract only the following structured resume fields from the text below and return valid JSON matching this shape:\n' +
     JSON.stringify(
       {
         fullName: '',
@@ -136,6 +197,20 @@ async function analyzeResume(resumeText) {
         experience: [],
         education: [],
         certifications: [],
+      },
+      null,
+      2
+    ) +
+    '\nUse empty strings for missing scalar fields and empty arrays for missing lists. Return ONLY valid JSON. Do not include any markdown fences, explanations, or additional text.\n\n' +
+    normalizedText;
+
+  const placementAnalysisSystem =
+    'You are a placement evaluation assistant. Use the supplied structured resume data to generate placement readiness analysis, a score, recommendations, company matches, and a 4-week roadmap. Return ONLY valid JSON with no markdown, no code fences (```), no explanation text, and no additional characters before or after the JSON.';
+
+  const placementAnalysisPromptPrefix =
+    'Analyze the following structured resume data and generate only the requested fields. Return valid JSON matching this shape:\n' +
+    JSON.stringify(
+      {
         placementScore: 0,
         resumeQuality: {
           score: 0,
@@ -143,24 +218,21 @@ async function analyzeResume(resumeText) {
         },
         technicalSkills: {
           score: 0,
-          matched: [],
-          missing: [],
           feedback: '',
         },
         projects: {
           score: 0,
           feedback: '',
         },
-        strengths: [],
-        weaknesses: [],
-        recommendations: [],
+        strengths: ['', '', ''],
+        weaknesses: ['', '', ''],
+        recommendations: ['', '', ''],
         companyMatches: [
           {
             company: 'Amazon',
             difficulty: '',
             match: 0,
-            matchedSkills: [],
-            missingSkills: [],
+            topMissingSkills: [],
           },
         ],
         roadmap: [
@@ -174,59 +246,71 @@ async function analyzeResume(resumeText) {
       null,
       2
     ) +
-    '\nUse integers for all scores. Do not invent resume information. Infer only when reasonable. Use empty strings for missing scalar fields and empty arrays for missing lists.\n' +
-    'Generate exactly 10 companyMatches for the following companies in this exact set and order: Amazon, Google, Microsoft, Adobe, Atlassian, Oracle, Zoho, TCS, Infosys, Accenture. Each companyMatch object must include: company, difficulty, match, matchedSkills, missingSkills.\n' +
-    'For roadmap, return exactly 4 weeks, each with week, title, and tasks.\n' +
-    'CRITICAL: Return ONLY valid JSON. Do not include any markdown fences (```), explanations, or additional text. The entire response must be a single valid JSON object that can be parsed directly.\n\n' +
-    normalizedText;
+    '\nUse integers for scores. Do not invent resume information. Infer only when reasonable. Use empty strings for missing scalar fields and empty arrays for missing lists.\n' +
+    'Return exactly 3 strengths, exactly 3 weaknesses, and exactly 3 recommendations.\n' +
+    'Return exactly 4 roadmap weeks. Each week must include only week, title, and exactly 2 short tasks.\n' +
+    'Generate exactly 10 companyMatches in this order: Amazon, Google, Microsoft, Adobe, Atlassian, Oracle, Zoho, TCS, Infosys, Accenture.\n' +
+    'Each companyMatch must include only company, difficulty, match, topMissingSkills (max 3 items). Do not include matchedSkills or missingSkills.\n' +
+    'Limit resumeQuality.feedback, technicalSkills.feedback, and projects.feedback to one concise sentence each.\n' +
+    'Use short wording, avoid extra text, and keep output compact.\n' +
+    'Return ONLY valid JSON. No markdown fences, no explanations, no extra text.\n\n';
 
   try {
-    const resp = await axios.post(
-      'https://openrouter.ai/api/v1/chat/completions',
-      {
-        model: AI_MODEL,
-        messages: [
-          { role: 'system', content: systemInstruction },
-          { role: 'user', content: userPrompt },
-        ],
-        temperature: 0.2,
-        max_tokens: 3000,
-      },
-      {
-       headers: {
-  Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-  'Content-Type': 'application/json',
-  'HTTP-Referer': 'http://localhost:5000',
-  'X-Title': 'SkillSync',
-},
-        timeout: 30_000,
-      }
+    const extractionContent = await openRouterChat(
+      [
+        { role: 'system', content: resumeExtractionSystem },
+        { role: 'user', content: resumeExtractionPrompt },
+      ],
+      0.2,
+      1500
     );
 
-    const choices = resp?.data?.choices;
-    const content =
-      Array.isArray(choices) && choices.length > 0
-        ? choices[0]?.message?.content || choices[0]?.message || choices[0]?.text
-        : null;
+    console.info('[Resume Analysis] Raw resume extraction response:', extractionContent);
 
-    if (!content) {
-      throw new Error('OpenRouter returned an empty response.');
+    const { parsed: resumeData, error: resumeParseError } = extractJsonFromText(extractionContent);
+    if (resumeData === null) {
+      console.error('[Resume Analysis] Resume extraction parse failed:', resumeParseError?.message || 'unknown error');
+      console.error('[Resume Analysis] Raw model response:', extractionContent);
+      throw new Error(
+        `Failed to parse OpenRouter resume extraction response. Raw response: ${JSON.stringify(
+          extractionContent,
+        )}`,
+      );
     }
 
-    console.info('[Resume Analysis] Raw OpenRouter response:', content);
-
-    const { parsed, error: parseError } = extractJsonFromText(content);
-    if (parsed !== null) {
-      return parsed;
-    }
-
-    console.error('[Resume Analysis] JSON parse failed:', parseError?.message || 'unknown error');
-    console.error('[Resume Analysis] Raw model response:', content);
-    throw new Error(
-      `Failed to parse OpenRouter resume analysis response. Raw response: ${JSON.stringify(
-        content,
-      )}`,
+    const placementContent = await openRouterChat(
+      [
+        { role: 'system', content: placementAnalysisSystem },
+        {
+          role: 'user',
+          content:
+            placementAnalysisPromptPrefix +
+            'Here is the structured resume data:\n' +
+            JSON.stringify(resumeData, null, 2) +
+            '\n\nReturn only the requested analysis JSON.' ,
+        },
+      ],
+      0.2,
+      4000
     );
+
+    console.info('[Resume Analysis] Raw placement analysis response:', placementContent);
+
+    const { parsed: placementAnalysis, error: placementParseError } = extractJsonFromText(placementContent);
+    if (placementAnalysis === null) {
+      console.error('[Resume Analysis] Placement analysis parse failed:', placementParseError?.message || 'unknown error');
+      console.error('[Resume Analysis] Raw model response:', placementContent);
+      throw new Error(
+        `Failed to parse OpenRouter placement analysis response. Raw response: ${JSON.stringify(
+          placementContent,
+        )}`,
+      );
+    }
+
+    return {
+      ...resumeData,
+      ...placementAnalysis,
+    };
   } catch (err) {
     if (err.isAxiosError) {
       const status = err.response?.status;
@@ -259,7 +343,6 @@ async function callAI(prompt) {
       {
         model: AI_MODEL,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
         max_tokens: 512,
       },
       {
