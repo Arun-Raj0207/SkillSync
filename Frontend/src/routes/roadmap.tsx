@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { Section } from "../components/Section";
 import { StepNavigation } from "../components/StepNavigation";
+import { useStudent } from "../context/StudentContext";
 
 export const Route = createFileRoute("/roadmap")({
   head: () => ({
@@ -44,77 +45,53 @@ interface WeekPlan {
   resource: { label: string; provider: string; url: string };
 }
 
-const WEEKS: WeekPlan[] = [
-  {
-    id: "w1",
-    title: "Week 1 · DSA Foundations",
-    focus: "Lock down arrays, strings, hashing and two-pointer patterns.",
-    tasks: [
-      "Solve 12 Easy + 8 Medium problems on arrays & strings",
-      "Master sliding window and two-pointer templates",
-      "Revise Big-O for every solution and write notes",
-    ],
-    resource: {
-      label: "Striver's A2Z DSA Sheet",
-      provider: "takeUforward · Free",
-      url: "https://takeuforward.org/strivers-a2z-dsa-course/strivers-a2z-dsa-course-sheet-2/",
-    },
-  },
-  {
-    id: "w2",
-    title: "Week 2 · Core CS & SQL",
-    focus: "Strengthen OS, DBMS and SQL — interviewer favourites.",
-    tasks: [
-      "Cover OS scheduling, deadlocks and memory mgmt",
-      "Practice 25 SQL queries on LeetCode (Easy → Medium)",
-      "Build an ER diagram for one of your projects",
-    ],
-    resource: {
-      label: "Gate Smashers — OS & DBMS",
-      provider: "YouTube · Free",
-      url: "https://www.youtube.com/@GateSmashers",
-    },
-  },
-  {
-    id: "w3",
-    title: "Week 3 · Projects & LLD",
-    focus: "Ship one polished project and learn a real LLD pattern.",
-    tasks: [
-      "Refactor your best project — README, tests, deploy",
-      "Design Splitwise or Parking Lot with classes + UML",
-      "Write 3 STAR stories about your project work",
-    ],
-    resource: {
-      label: "Low-Level Design Primer",
-      provider: "GitHub · prasadgujar · Free",
-      url: "https://github.com/prasadgujar/low-level-design-primer",
-    },
-  },
-  {
-    id: "w4",
-    title: "Week 4 · Mock Interviews",
-    focus: "Simulate the real thing — DSA, HR and behavioural.",
-    tasks: [
-      "Do 4 timed DSA mocks (45 min each)",
-      "Record 2 HR mocks, review tone and pacing",
-      "Apply to 10 target companies with tailored resume",
-    ],
-    resource: {
-      label: "Pramp — Free peer mock interviews",
-      provider: "Pramp · Free",
-      url: "https://www.pramp.com/",
-    },
-  },
-];
+interface BackendRoadmapWeek {
+  week?: string | number;
+  title?: string;
+  tasks?: string[];
+}
+
+interface BackendResumeAnalysis {
+  roadmap?: BackendRoadmapWeek[];
+}
+
+function buildRoadmapWeeks(analysis: BackendResumeAnalysis | null | undefined): WeekPlan[] {
+  const roadmap = Array.isArray(analysis?.roadmap) ? analysis!.roadmap : [];
+
+  if (roadmap.length === 0) {
+    return [];
+  }
+
+  return roadmap.slice(0, 4).map((week, index) => {
+    const title = week.title?.trim() || `Week ${index + 1}`;
+    const tasks = Array.isArray(week.tasks) && week.tasks.length > 0
+      ? week.tasks.filter(Boolean)
+      : [`Complete the recommended tasks for ${title}.`];
+
+    return {
+      id: `w${index + 1}`,
+      title: `Week ${index + 1} · ${title}`,
+      focus: `Focus on the recommended priorities for ${title.toLowerCase()}.`,
+      tasks,
+      resource: {
+        label: `SkillSync roadmap · ${title}`,
+        provider: "AI-generated plan",
+        url: "#",
+      },
+    };
+  });
+}
 
 function RoadmapPage() {
   const navigate = useNavigate();
+  const { analysis } = useStudent();
   const [done, setDone] = useState<Record<string, boolean>>({});
+  const weeks = useMemo(() => buildRoadmapWeeks(analysis as BackendResumeAnalysis | null), [analysis]);
   const completed = useMemo(
-    () => WEEKS.filter((w) => done[w.id]).length,
-    [done],
+    () => weeks.filter((w) => done[w.id]).length,
+    [done, weeks],
   );
-  const pct = Math.round((completed / WEEKS.length) * 100);
+  const pct = weeks.length > 0 ? Math.round((completed / weeks.length) * 100) : 0;
 
   return (
     <>
@@ -206,7 +183,7 @@ function RoadmapPage() {
             }}
           />
           <Typography variant="body2" color="text.secondary">
-            {completed} of {WEEKS.length} weeks completed
+            {completed} of {weeks.length} weeks completed
           </Typography>
         </Stack>
       </Card>
@@ -225,7 +202,7 @@ function RoadmapPage() {
           }}
         />
         <Stack spacing={{ xs: 2.5, md: 3 }}>
-          {WEEKS.map((w, i) => (
+          {weeks.map((w, i) => (
             <WeekCard
               key={w.id}
               week={w}

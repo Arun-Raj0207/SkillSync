@@ -291,7 +291,7 @@ async function analyzeResume(resumeText) {
         },
       ],
       0.2,
-      4000
+      3000
     );
 
     console.info('[Resume Analysis] Raw placement analysis response:', placementContent);
